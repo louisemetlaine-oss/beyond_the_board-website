@@ -7,248 +7,210 @@ from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 import json
 import chess
-import chess.engine
 import random
+
 import os
+import requests
+
+# Cloud endpoint from colleague (fallback to localhost if env not set)
+FASTAPI_URL = os.environ.get(
+    "FASTAPI_URL",
+    "https://beyond-the-board-266726061553.europe-west1.run.app"
+)
+ENGINE_ENDPOINTS = {
+    "Optimus_Prime": f"{FASTAPI_URL}/Optimus_Prime",
+     "Shallow_Blue": f"{FASTAPI_URL}/Shallow_Blue",
+     "Big_Brother": f"{FASTAPI_URL}/Big_Brother",
+}
+DEFAULT_ENGINE = "Optimus_Prime"
 
 
-def _open_stockfish():
+def _to_cp(val):
     """
-    Try to open a Stockfish engine from PATH. Returns engine or None.
+    Convert pawn units (as returned by FastAPI) to centipawns for the UI.
+    The frontend expects centipawns when formatting scores.
     """
-    engine_path = os.environ.get("STOCKFISH_PATH", "stockfish")
-    try:
-        return chess.engine.SimpleEngine.popen_uci(engine_path)
-    except FileNotFoundError:
-        return None
-    except Exception:
-        return None
+    return None if val is None else val * 100
 
 
-def _stockfish_best_move(fen: str, depth: int = 12):
-    engine = _open_stockfish()
-    if not engine:
-        return None, None
-    try:
-        board = chess.Board(fen)
-        info = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=1)
-        best = info["pv"][0]
-        score = info.get("score")
-        engine.quit()
-        return best, score
-    except Exception:
-        try:
-            engine.quit()
-        finally:
-            return None, None
+# def _open_stockfish():
+#     """
+#     Try to open a Stockfish engine from PATH. Returns engine or None.
+#     """
+#     engine_path = os.environ.get("STOCKFISH_PATH", "stockfish")
+#     try:
+#         return chess.engine.SimpleEngine.popen_uci(engine_path)
+#     except FileNotFoundError:
+#         return None
+#     except Exception:
+#         return None
 
 
-def _stockfish_top_moves(fen: str, depth: int = 12, multipv: int = 8):
-    engine = _open_stockfish()
-    if not engine:
-        return []
-    try:
-        board = chess.Board(fen)
-        infos = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=multipv)
-        moves = []
-        for info in infos:
-            if "pv" not in info or len(info["pv"]) == 0:
-                continue
-            mv = info["pv"][0]
-            moves.append({
-                "uci": mv.uci(),
-                "san": board.san(mv),
-                "score": info.get("score").pov(board.turn).score(mate_score=100000) if info.get("score") else None,
-                "mate": info.get("score").pov(board.turn).mate() if info.get("score") else None,
-                "from": chess.square_name(mv.from_square),
-                "to": chess.square_name(mv.to_square),
-            })
-        engine.quit()
-        return moves
-    except Exception:
-        try:
-            engine.quit()
-        finally:
-            return []
+# def _stockfish_best_move(fen: str, depth: int = 12):
+#     engine = _open_stockfish()
+#     if not engine:
+#         return None, None
+#     try:
+#         board = chess.Board(fen)
+#         info = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=1)
+#         best = info["pv"][0]
+#         score = info.get("score")
+#         engine.quit()
+#         return best, score
+#     except Exception:
+#         try:
+#             engine.quit()
+#         finally:
+#             return None, None
 
 
-def _stockfish_eval_move(fen: str, move_uci: str, depth: int = 10):
-    """
-    Evaluate a specific move by making it and analyzing the resulting position.
-    Returns score from the perspective of the side that made the move.
-    """
-    engine = _open_stockfish()
-    if not engine:
-        return None, None
-    try:
-        board = chess.Board(fen)
-        move = chess.Move.from_uci(move_uci)
-        if move not in board.legal_moves:
-            engine.quit()
-            return None, None
+# def _stockfish_top_moves(fen: str, depth: int = 12, multipv: int = 8):
+#     engine = _open_stockfish()
+#     if not engine:
+#         return []
+#     try:
+#         board = chess.Board(fen)
+#         infos = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=multipv)
+#         moves = []
+#         for info in infos:
+#             if "pv" not in info or len(info["pv"]) == 0:
+#                 continue
+#             mv = info["pv"][0]
+#             moves.append({
+#                 "uci": mv.uci(),
+#                 "san": board.san(mv),
+#                 "score": info.get("score").pov(board.turn).score(mate_score=100000) if info.get("score") else None,
+#                 "mate": info.get("score").pov(board.turn).mate() if info.get("score") else None,
+#                 "from": chess.square_name(mv.from_square),
+#                 "to": chess.square_name(mv.to_square),
+#             })
+#         engine.quit()
+#         return moves
+#     except Exception:
+#         try:
+#             engine.quit()
+#         finally:
+#             return []
+
+
+# def _stockfish_eval_move(fen: str, move_uci: str, depth: int = 10):
+#     """
+#     Evaluate a specific move by making it and analyzing the resulting position.
+#     Returns score from the perspective of the side that made the move.
+#     """
+#     engine = _open_stockfish()
+#     if not engine:
+#         return None, None
+#     try:
+#         board = chess.Board(fen)
+#         move = chess.Move.from_uci(move_uci)
+#         if move not in board.legal_moves:
+#             engine.quit()
+#             return None, None
         
-        # Make the move and evaluate resulting position
-        board.push(move)
-        info = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=1)
-        engine.quit()
+#         # Make the move and evaluate resulting position
+#         board.push(move)
+#         info = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=1)
+#         engine.quit()
         
-        # Score is from opponent's perspective after move, so negate it
-        score = info.get("score")
-        if score:
-            # Get score from the perspective of who just moved (negate opponent's view)
-            score_cp = -score.pov(board.turn).score(mate_score=100000)
-            mate = score.pov(board.turn).mate()
-            if mate is not None:
-                mate = -mate
-            return score_cp, mate
-        return None, None
-    except Exception as e:
-        try:
-            engine.quit()
-        except:
-            pass
-        return None, None
+#         # Score is from opponent's perspective after move, so negate it
+#         score = info.get("score")
+#         if score:
+#             # Get score from the perspective of who just moved (negate opponent's view)
+#             score_cp = -score.pov(board.turn).score(mate_score=100000)
+#             mate = score.pov(board.turn).mate()
+#             if mate is not None:
+#                 mate = -mate
+#             return score_cp, mate
+#         return None, None
+#     except Exception as e:
+#         try:
+#             engine.quit()
+#         except:
+#             pass
+#         return None, None
 
 
-# =============================================================================
-# ENGINE ABSTRACTION LAYER
-# =============================================================================
-# This is where you plug in your ML models
-
-def get_engine_analysis(fen: str, engine_type: str = 'stockfish', depth: int = 12, multipv: int = 8):
+def _fastapi_analyze(fen: str, engine: str = DEFAULT_ENGINE):
     """
-    Unified interface for getting move analysis from any engine.
-    
-    To add your ML model:
-    1. Add a new elif branch for your engine name
-    2. Call your model's API/function
-    3. Return data in the same format as stockfish
-    
-    Expected return format (list of dicts):
-    [
-        {
-            "uci": "e2e4",
-            "san": "e4", 
-            "score": 35,  # centipawns, positive = good for side to move
-            "mate": null,  # or number of moves to mate
-            "from": "e2",
-            "to": "e4"
-        },
+    Call the FastAPI endpoint once and return its JSON payload.
+    Expected shape (from your colleague):
+    {
+      "current_eval": float,
+      "to_move": "white"|"black",
+      "moves": [
+        {"move_uci": "...", "move_san": "...", "eval_after": float, "eval_change": float, "improves": bool},
         ...
-    ]
+      ]
+    }
     """
-    if engine_type == 'stockfish':
-        return _stockfish_top_moves(fen, depth=depth, multipv=multipv)
-    
-    elif engine_type == 'random':
-        # Simple random fallback
-        board = chess.Board(fen)
-        moves = []
-        for mv in list(board.legal_moves)[:multipv]:
-            moves.append({
-                "uci": mv.uci(),
-                "san": board.san(mv),
-                "score": random.randint(-50, 50),  # Random fake score
-                "mate": None,
-                "from": chess.square_name(mv.from_square),
-                "to": chess.square_name(mv.to_square),
-            })
-        return moves
-    
-    # =============================================================
-    # ADD YOUR ML MODEL HERE
-    # =============================================================
-    # elif engine_type == 'my_neural_net':
-    #     # Example: call your FastAPI endpoint
-    #     import requests
-    #     response = requests.post(
-    #         'http://localhost:8001/analyze',
-    #         json={'fen': fen, 'multipv': multipv}
-    #     )
-    #     return response.json()['moves']
-    #
-    # elif engine_type == 'alpha_chess':
-    #     from my_models import AlphaChessModel
-    #     model = AlphaChessModel.load()
-    #     return model.analyze(fen, top_k=multipv)
-    # =============================================================
-    
-    else:
-        # Unknown engine, fall back to stockfish
-        return _stockfish_top_moves(fen, depth=depth, multipv=multipv)
+    endpoint = ENGINE_ENDPOINTS.get(engine, ENGINE_ENDPOINTS[DEFAULT_ENGINE])
+    r = requests.get(endpoint, params={"fen": fen}, timeout=10)
+    r.raise_for_status()
+    return r.json()
 
 
-def get_engine_best_move(fen: str, engine_type: str = 'stockfish', depth: int = 12):
-    """
-    Unified interface for getting the best move from any engine.
-    Used for AI opponent moves.
-    
-    To add your ML model:
-    1. Add a new elif branch
-    2. Return (move_uci, score_centipawns) or (move_uci, None)
-    """
-    if engine_type == 'stockfish':
-        best, score = _stockfish_best_move(fen, depth=depth)
-        if best:
-            score_cp = None
-            if score:
-                board = chess.Board(fen)
-                score_cp = score.pov(board.turn).score(mate_score=100000)
-            return best.uci(), score_cp
-        return None, None
-    
-    elif engine_type == 'random':
-        board = chess.Board(fen)
-        legal = list(board.legal_moves)
-        if legal:
-            mv = random.choice(legal)
-            return mv.uci(), None
-        return None, None
-    
-    # =============================================================
-    # ADD YOUR ML MODEL HERE
-    # =============================================================
-    # elif engine_type == 'my_neural_net':
-    #     import requests
-    #     response = requests.post(
-    #         'http://localhost:8001/best-move',
-    #         json={'fen': fen}
-    #     )
-    #     data = response.json()
-    #     return data['move'], data.get('score')
-    # =============================================================
-    
-    else:
-        best, score = _stockfish_best_move(fen, depth=depth)
-        if best:
-            return best.uci(), None
+# =============================================================================
+# ENGINE ABSTRACTION LAYER (now wired to FastAPI)
+# =============================================================================
+
+def get_engine_analysis(fen: str, engine_type: str = "fastapi", depth: int = 12, multipv: int = 8, engine: str = DEFAULT_ENGINE):
+    data = _fastapi_analyze(fen, engine=engine)
+    moves = data.get("moves", [])[:multipv]
+    to_move = data.get("to_move", "white")
+
+    # Sort best-first for side to move: white wants max eval, black wants min eval
+    reverse = to_move != "black"
+    moves_sorted = sorted(moves, key=lambda m: m.get("eval_after", 0), reverse=reverse)
+
+    out = []
+    for idx, mv in enumerate(moves_sorted):
+        uci = mv.get("move_uci")
+        try:
+            mobj = chess.Move.from_uci(uci)
+            frm = chess.square_name(mobj.from_square)
+            to = chess.square_name(mobj.to_square)
+        except Exception:
+            frm = to = None
+        out.append({
+            "uci": uci,
+            "san": mv.get("move_san"),
+            "score": _to_cp(mv.get("eval_after")),
+            "mate": None,
+            "from": frm,
+            "to": to,
+            "rank": idx + 1
+        })
+    return out
+
+
+def get_engine_best_move(fen: str, engine_type: str = "fastapi", depth: int = 12, engine: str = DEFAULT_ENGINE):
+    data = _fastapi_analyze(fen, engine=engine)
+    # Log incoming analysis for visibility
+    try:
+        first_move = data.get("moves", [None])[0]
+        print(f"[engine_best] engine={engine} to_move={data.get('to_move')} current_eval={data.get('current_eval')} first_move={first_move}", flush=True)
+    except Exception:
+        pass
+    moves = data.get("moves", [])
+    to_move = data.get("to_move", "white")
+    if not moves:
         return None, None
 
-
-def get_single_move_eval(fen: str, move_uci: str, engine_type: str = 'stockfish', depth: int = 10):
-    """
-    Evaluate a single specific move. Used for real-time HUD updates.
-    
-    Returns (score_cp, mate) tuple.
-    """
-    if engine_type == 'stockfish':
-        return _stockfish_eval_move(fen, move_uci, depth=depth)
-    
-    # =============================================================
-    # ADD YOUR ML MODEL HERE
-    # =============================================================
-    # elif engine_type == 'my_neural_net':
-    #     import requests
-    #     response = requests.post(
-    #         'http://localhost:8001/evaluate-move',
-    #         json={'fen': fen, 'move': move_uci}
-    #     )
-    #     data = response.json()
-    #     return data.get('score'), data.get('mate')
-    # =============================================================
-    
+    # Best is max eval for white, min eval for black
+    if to_move == "black":
+        best = min(moves, key=lambda m: m.get("eval_after", 0))
     else:
-        return _stockfish_eval_move(fen, move_uci, depth=depth)
+        best = max(moves, key=lambda m: m.get("eval_after", 0))
+    return best.get("move_uci"), _to_cp(best.get("eval_after"))
+
+
+def get_single_move_eval(fen: str, move_uci: str, engine_type: str = "fastapi", depth: int = 10, engine: str = DEFAULT_ENGINE):
+    data = _fastapi_analyze(fen, engine=engine)
+    for mv in data.get("moves", []):
+        if mv.get("move_uci") == move_uci:
+            return _to_cp(mv.get("eval_after")), None
+    return None, None
 
 
 def index(request):
@@ -287,21 +249,16 @@ def ai_move(request):
     try:
         data = json.loads(request.body)
         fen = data.get('fen', '')
-        engine_choice = data.get('engine', 'stockfish')
+        engine_choice = data.get('engine', DEFAULT_ENGINE)
         
         # Use engine abstraction layer
-        move, score_cp = get_engine_best_move(fen, engine_type=engine_choice, depth=12)
+        move, score_cp = get_engine_best_move(fen, engine_type='fastapi', depth=12, engine=engine_choice)
 
-        # Fallback if engine failed
-        if not move:
-            board = chess.Board(fen)
-            legal = list(board.legal_moves)
-            if legal:
-                mv = random.choice(legal)
-                move = mv.uci()
+        # Log what we received/sent to help diagnose stuck AI turns
+        print(f"[ai_move] engine={engine_choice} fen='{fen}' -> move={move} score={score_cp}", flush=True)
 
         if not move:
-            return JsonResponse({'status': 'error', 'message': 'No legal move'}, status=400)
+            return JsonResponse({'status': 'error', 'message': 'Model unavailable'}, status=503)
 
         return JsonResponse({
             'status': 'ok',
@@ -349,36 +306,26 @@ def coach_analysis(request):
         pgn = data.get('pgn', '')
         persona = data.get('persona', 'balanced')
         depth = int(data.get('depth', 10))
+        engine_choice = data.get('engine', DEFAULT_ENGINE)
 
         board = chess.Board(fen)
 
-        # Use stockfish for recommendations if available
-        top = _stockfish_top_moves(fen, depth=depth, multipv=3)
-        if not top:
-            # fallback: simple material heuristic
-            legal = list(board.legal_moves)
-            legal_san = [board.san(mv) for mv in legal][:3]
+        analysis = get_engine_analysis(fen, engine_type='fastapi', depth=depth, multipv=3, engine=engine_choice)
+        if not analysis:
             return JsonResponse({
-                'status': 'fallback',
-                'message': 'Stockfish not available; fallback suggestions.',
-                'evaluation': None,
-                'best_move': legal_san[0] if legal_san else None,
-                'recommended': [{'san': mv} for mv in legal_san],
-                'dialog': 'Engine unavailable. Playing it safe; develop pieces and control the center.',
-                'persona': persona,
-            })
+                'status': 'error',
+                'message': 'Model unavailable',
+            }, status=503)
 
-        best = top[0]
         recommended = []
-        for mv in top:
-            board_tmp = board.copy()
-            move_obj = chess.Move.from_uci(mv["uci"])
-            san = board_tmp.san(move_obj)
+        for mv in analysis:
             recommended.append({
-                "san": san,
-                "uci": mv["uci"],
+                "san": mv.get("san"),
+                "uci": mv.get("uci"),
                 "score_cp": mv.get("score"),
-                "mate": mv.get("mate")
+                "mate": mv.get("mate"),
+                "from": mv.get("from"),
+                "to": mv.get("to"),
             })
 
         dialog_map = {
@@ -390,11 +337,12 @@ def coach_analysis(request):
 
         return JsonResponse({
             'status': 'ok',
-            'evaluation': best.get("score"),
+            'evaluation': recommended[0].get("score") if recommended else None,
             'best_move': recommended[0] if recommended else None,
             'recommended': recommended,
             'dialog': dialog,
             'persona': persona,
+            'engine': engine_choice,
         })
     except json.JSONDecodeError:
         return JsonResponse({'error': 'Invalid JSON'}, status=400)
@@ -424,18 +372,17 @@ def evaluate_position(request):
     try:
         data = json.loads(request.body)
         fen = data.get('fen', '')
+        engine_choice = data.get('engine', DEFAULT_ENGINE)
 
-        # Try stockfish evaluation
-        best, score = _stockfish_best_move(fen, depth=8)
-        eval_cp = None
-        if score:
-            eval_cp = score.pov(chess.WHITE).score(mate_score=100000)
+        data = _fastapi_analyze(fen, engine=engine_choice)
+        eval_cp = _to_cp(data.get("current_eval"))
 
         return JsonResponse({
             'status': 'ok',
             'evaluation': eval_cp,
             'win_probability': None,  # Not calculated here
-            'received_fen': fen
+            'received_fen': fen,
+            'engine': engine_choice,
         })
     except json.JSONDecodeError:
         return JsonResponse({'error': 'Invalid JSON'}, status=400)
@@ -480,7 +427,8 @@ def legal_moves(request):
     try:
         data = json.loads(request.body)
         fen = data.get('fen')
-        engine_type = data.get('engine', 'stockfish')
+        engine_type = 'fastapi'
+        engine_choice = data.get('engine', DEFAULT_ENGINE)
         if not fen:
             return JsonResponse({'error': 'FEN is required'}, status=400)
 
@@ -490,7 +438,8 @@ def legal_moves(request):
             return JsonResponse({'error': 'Invalid FEN'}, status=400)
 
         # Use engine abstraction layer - get top 20 moves pre-computed
-        top_moves = get_engine_analysis(fen, engine_type=engine_type, depth=10, multipv=20)
+        top_moves = get_engine_analysis(fen, engine_type=engine_type, depth=10, multipv=20, engine=engine_choice)
+        print(f"[legal_moves] engine={engine_choice} fen='{fen}' top_moves_count={len(top_moves)}", flush=True)
 
         moves = []
         for mv in board.legal_moves:
@@ -511,7 +460,8 @@ def legal_moves(request):
         return JsonResponse({
             'status': 'ok',
             'legal_moves': moves,
-            'top_moves': top_moves  # scored/ranked if engine available
+            'top_moves': top_moves,  # scored/ranked if engine available
+            'engine': engine_choice,
         })
     except json.JSONDecodeError:
         return JsonResponse({'error': 'Invalid JSON'}, status=400)
@@ -543,19 +493,21 @@ def evaluate_move(request):
         data = json.loads(request.body)
         fen = data.get('fen')
         move_uci = data.get('move_uci')
-        engine_type = data.get('engine', 'stockfish')
+        engine_type = 'fastapi'
+        engine_choice = data.get('engine', DEFAULT_ENGINE)
         
         if not fen or not move_uci:
             return JsonResponse({'error': 'FEN and move_uci required'}, status=400)
         
         # Use abstraction layer for single move evaluation
-        score_cp, mate = get_single_move_eval(fen, move_uci, engine_type=engine_type, depth=8)
+        score_cp, mate = get_single_move_eval(fen, move_uci, engine_type=engine_type, depth=8, engine=engine_choice)
         
         return JsonResponse({
             'status': 'ok',
             'score_cp': score_cp,
             'mate': mate,
-            'move_uci': move_uci
+            'move_uci': move_uci,
+            'engine': engine_choice,
         })
     except json.JSONDecodeError:
         return JsonResponse({'error': 'Invalid JSON'}, status=400)
