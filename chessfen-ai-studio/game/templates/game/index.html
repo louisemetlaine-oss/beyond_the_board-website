@@ -118,17 +118,17 @@
                         <div>
                             <h3 class="font-semibold text-sm">Coach</h3>
                             <select class="select select-ghost select-xs -ml-1 text-base-content/60" id="coachSelect">
-                                <option value="balanced">Balanced GM</option>
-                                <option value="aggressive">Tactical Attacker</option>
-                                <option value="defensive">Solid Defender</option>
+                                <option value="Optimus_Prime">Optimus_Prime (Coach)</option>
+                                <option value="Shallow_Blue">Shallow_Blue (Coach)</option>
+                                <option value="Big_Brother">Big_Brother (Coach)</option>
                             </select>
                         </div>
                     </div>
                     <input type="checkbox" class="toggle toggle-primary toggle-xs" id="coachToggle" checked>
                 </div>
 
-                <!-- Split slider between moves and chat -->
-                <div class="flex items-center gap-2 text-[11px] text-base-content/60 mb-2">
+                <!-- Split slider between moves and chat (hidden as chat pane is deprecated) -->
+                <div class="flex items-center gap-2 text-[11px] text-base-content/60 mb-2 hidden">
                     <span class="uppercase tracking-wide">Moves</span>
                     <input type="range" min="30" max="70" value="50" class="range range-xs flex-1" id="paneSplit">
                     <span class="uppercase tracking-wide">Chat</span>
@@ -149,7 +149,7 @@
                     </div>
 
                     <!-- Coach Dialogue -->
-                    <div class="flex flex-col min-h-0 bg-base-100/60 rounded-xl p-3 text-sm overflow-hidden" id="chatPane">
+                    <div class="flex flex-col min-h-0 bg-base-100/60 rounded-xl p-3 text-sm overflow-hidden hidden" id="chatPane">
                         <p class="text-xs text-base-content/50 mb-2">Coach says...</p>
                         <div class="flex-1 bg-base-100/60 rounded-xl p-3 text-sm overflow-y-auto coach-dialogue" id="coachDialogue">
                             <p class="text-base-content/60">Play a move to get coaching advice.</p>
@@ -187,10 +187,11 @@
                             <span class="text-xs">Ready</span>
                         </div>
                         <select class="select select-ghost select-xs w-full text-center text-[10px] -mt-0.5" id="engineSelect">
-                            <option value="stockfish">Stockfish</option>
-                            <option value="random">Random</option>
+                            <option value="Optimus_Prime">Optimus_Prime</option>
+                            <option value="Shallow_Blue">Shallow_Blue</option>
+                            <option value="Big_Brother">Big_Brother</option>
                         </select>
-                        <span class="text-[10px] text-base-content/40">AI Engine</span>
+                        <span class="text-[10px] text-base-content/40">Model</span>
                     </div>
                     <!-- Stats -->
                     <div class="flex flex-col items-center">
@@ -204,7 +205,7 @@
                 </div>
             <div class="mt-2 text-center text-[10px] text-base-content/50">
                 <span class="font-semibold text-xs text-primary" id="aiEvalCp">--</span>
-                <span class="ml-1">Stockfish score (cp / mate)</span>
+                <span class="ml-1">Model score</span>
             </div>
                 <!-- History (collapsible feel) -->
                 <details class="mt-2">

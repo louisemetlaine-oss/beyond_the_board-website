@@ -16,8 +16,8 @@
     let aiCaptures = 0;
     let highlightedSquares = [];
     let legalMovesCache = [];
-    let selectedEngine = 'stockfish';
-    let selectedCoach = 'balanced';
+    let selectedEngine = 'Optimus_Prime';         // Black (AI opponent)
+    let selectedCoachEngine = 'Optimus_Prime';    // White coach suggestions
     
     // Drag tracking state
     let isDragging = false;
@@ -383,6 +383,13 @@
     }
 
     async function updateLegalMoves() {
+        // Only compute/display coach suggestions for White (user) turn.
+        if (game.turn() !== 'w') {
+            legalMovesCache = [];
+            elements.moveCount.textContent = 0;
+            return;
+        }
+        
         // Clear eval cache when position changes
         const newFen = game.fen();
         if (newFen !== currentFen) {
@@ -397,7 +404,7 @@
             const res = await fetch('/api/legal-moves/', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ fen: game.fen(), engine: selectedEngine })
+                body: JSON.stringify({ fen: game.fen(), engine: selectedCoachEngine })
             });
             const data = await res.json();
             if (Array.isArray(data.top_moves)) {
@@ -428,21 +435,13 @@
                 });
             }
         } catch (e) {
-            // ignore and fallback
+            showToast('Model offline. Please start FastAPI.', 'error');
+            return;
         }
 
-        // Fallback to chess.js if API failed
         if (moves.length === 0) {
-            moves = game.moves({ verbose: true }).map((m, idx) => ({
-                san: m.san,
-                from: m.from,
-                to: m.to,
-                uci: `${m.from}${m.to}`,
-                captured: m.captured,
-                is_check: m.san.includes('+'),
-                is_mate: m.san.includes('#'),
-                id: `${m.from}-${m.to}-${idx}`
-            }));
+            showToast('No moves returned by model.', 'error');
+            return;
         }
 
         legalMovesCache = moves;
@@ -550,6 +549,15 @@
     // ===========================================
     // AI Move
     // ===========================================
+    function uciToMoveSpec(uci) {
+        // Convert UCI like "e2e4" or "e7e8q" to the object chess.js expects
+        if (typeof uci !== 'string' || uci.length < 4) return uci;
+        const from = uci.slice(0, 2);
+        const to = uci.slice(2, 4);
+        const promo = uci.length >= 5 ? uci[4] : undefined;
+        return promo ? { from, to, promotion: promo } : { from, to };
+    }
+
     async function makeAIMove() {
         if (game.game_over() || game.turn() !== 'b') return;
 
@@ -571,7 +579,8 @@
             const data = await res.json();
 
             if (data.move && data.status !== 'placeholder') {
-                const move = game.move(data.move);
+                // Backend returns UCI; chess.js needs SAN or {from,to}
+                const move = game.move(uciToMoveSpec(data.move));
                 if (move) {
                     if (move.captured) aiCaptures++;
                     aiMoves++;
@@ -581,26 +590,9 @@
                 }
             }
         } catch (e) {
-            console.log('API unavailable, using fallback');
+            showToast('Model offline. Please start FastAPI.', 'error');
+            return;
         }
-
-        // Fallback: simple random with preference
-        await delay(400);
-        const moves = game.moves();
-        let selected = moves[Math.floor(Math.random() * moves.length)];
-
-        // Prefer captures/checks
-        for (const m of moves) {
-            if (m.includes('x') || m.includes('+') || m.includes('#')) {
-                selected = m;
-                break;
-            }
-        }
-
-        const move = game.move(selected);
-        if (move && move.captured) aiCaptures++;
-        aiMoves++;
-        finishAIMove(aiScoreCp);
     }
 
     function finishAIMove(aiScoreCp = null) {
@@ -891,7 +883,7 @@
                     body: JSON.stringify({
                         fen: game.fen(),
                         move_uci: from + to,
-                        engine: selectedEngine
+                        engine: selectedCoachEngine
                     })
                 });
                 
@@ -968,8 +960,9 @@
                 body: JSON.stringify({
                     fen: game.fen(),
                     pgn: game.pgn(),
-                    persona: selectedCoach,
-                    depth: 12
+                    persona: 'balanced',
+                    depth: 12,
+                    engine: selectedCoachEngine
                 })
             });
             const data = await res.json();
@@ -1116,13 +1109,42 @@
         elements.gameOverModal.close();
         newGame();
     });
-    elements.engineSelect.addEventListener('change', (e) => {
+    elements.engineSelect.addEventListener('change', async (e) => {
         selectedEngine = e.target.value;
         localStorage.setItem('chess-arena-engine', selectedEngine);
+        
+        // Cancel any pending real-time eval
+        if (evalRequestQueue.has('pending')) {
+            clearTimeout(evalRequestQueue.get('pending'));
+            evalRequestQueue.delete('pending');
+        }
+        
+        // Clear caches so fresh data comes from the newly selected model
+        evalCache.clear();
+        legalMovesCache = [];
+        lastEvalTarget = null;
+        
+        // Refresh UI (legal moves, scores, coach) with the new model
+        await updateUI();
     });
-    elements.coachSelect.addEventListener('change', (e) => {
-        selectedCoach = e.target.value;
-        localStorage.setItem('chess-arena-coach', selectedCoach);
+    elements.coachSelect.addEventListener('change', async (e) => {
+        selectedCoachEngine = e.target.value;
+        localStorage.setItem('chess-arena-coach-engine', selectedCoachEngine);
+        
+        // Cancel any pending real-time eval
+        if (evalRequestQueue.has('pending')) {
+            clearTimeout(evalRequestQueue.get('pending'));
+            evalRequestQueue.delete('pending');
+        }
+        
+        // Clear caches so fresh data comes from the newly selected coach model
+        evalCache.clear();
+        legalMovesCache = [];
+        lastEvalTarget = null;
+        currentFen = ''; // force re-eval on same position
+        
+        // Refresh UI with the new coach model (white suggestions)
+        await updateUI();
     });
     elements.askCoachBtn.addEventListener('click', fetchCoachDialog);
 
@@ -1153,10 +1175,10 @@
         selectedEngine = savedEngine;
         elements.engineSelect.value = savedEngine;
     }
-    const savedCoach = localStorage.getItem('chess-arena-coach');
-    if (savedCoach) {
-        selectedCoach = savedCoach;
-        elements.coachSelect.value = savedCoach;
+    const savedCoachEngine = localStorage.getItem('chess-arena-coach-engine');
+    if (savedCoachEngine) {
+        selectedCoachEngine = savedCoachEngine;
+        elements.coachSelect.value = savedCoachEngine;
     }
 
     // ===========================================
